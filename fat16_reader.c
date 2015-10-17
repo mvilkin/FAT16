@@ -72,7 +72,6 @@ void init_reader(int fd);
 void deinit_reader();
 void read_boot_sector(int fd, boot_sector_t * bsector);
 void count_fs_info(boot_sector_t * bsector);
-void read_dir(int fd, size_t offset, char * path, instruction_t instr);
 void read_dir_record(int fd, size_t offset, dir_record_t * record);
 void print_name(dir_record_t * record);
 void print_dir(int fd, size_t num_cluster);
@@ -88,7 +87,7 @@ void get_command(command_t * command);
 instruction_t get_instruction_from_string(char * string);
 void print_help();
 void print_error(error_t type);
-size_t find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, record_type_t * type);
+int find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, dir_record_t * record);
 bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record);
 
 fs_info_t * fs_info;
@@ -103,8 +102,11 @@ int main(int argc, char * argv[]) {
     int image_fd = open(image_name, O_RDONLY);
     init_reader(image_fd);
     command_t * command = (command_t*)calloc(1, sizeof(command_t));
+    dir_record_t * current_record = (dir_record_t*)calloc(1, sizeof(dir_record_t));
     record_type_t current_type;
     size_t current_cluster;
+    size_t current_size;
+    int ret;
 
     while (1) {
         printf("> ");
@@ -114,16 +116,23 @@ int main(int argc, char * argv[]) {
             print_help();
             break;
         case LS:
-            current_cluster = find_num_cluster_by_path(image_fd, 1, command->path, &current_type);
-            if (current_cluster == 0) {
-                print_error(WRONG_PATH);
-                break;
-            }
-            if (current_type == DIRECTORY)
-                print_dir(image_fd, current_cluster);
+            ret = find_num_cluster_by_path(image_fd, 1, command->path, current_record);
+            if (ret >= 0)
+                print_error(ret);
+            else if (current_record->type == DIRECTORY)
+                print_dir(image_fd, current_record->begin_cluster);
+            else
+                print_error(WRONG_COMMAND);
             break;
         case CAT:
-            read_dir(image_fd, fs_info->offset_to_root_dir, command->path, command->type);
+            ret = find_num_cluster_by_path(image_fd, 1, command->path, current_record);
+            if (ret >= 0)
+                print_error(ret);
+            else if (current_record->type == REGFILE)
+                print_file(image_fd, current_record->begin_cluster, current_record->size);
+            else
+                print_error(WRONG_COMMAND);
+            break;
         case EXIT:
         default:
             break;
@@ -132,6 +141,7 @@ int main(int argc, char * argv[]) {
             break;
     }
 
+    free(current_record);
     free(command);
     deinit_reader();
     close(image_fd);
@@ -217,12 +227,12 @@ bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * rec
     return false;
 }
 
-size_t find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, record_type_t * type) {
+int find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, dir_record_t * record) {
     if (path[0] == 0 && num_entry_cluster == 1) {
-        *type = DIRECTORY;
-        return 1;
+        record->begin_cluster = 1;
+        record->type = DIRECTORY;
+        return -1;
     }
-    dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
     char * name = (char *)calloc(14, sizeof(char));
     get_name_from_path(name, path);
     int num = num_entry_cluster;
@@ -236,66 +246,14 @@ size_t find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, r
         read(fd, &num, 2);
     } while (0x0002 <= num && num <= 0xFFEF);
     if (!path_is_right)
-        return 0;
+        return WRONG_PATH;
     remove_name_from_path(path);
-    int next_entry_cluster = record->begin_cluster;
-    record_type_t current_type = record->type;
     free(name);
-    free(record);
-    if (strlen(path) == 0) {
-        *type = current_type;
-        return next_entry_cluster;
-    } else
-        return find_num_cluster_by_path(fd, record->begin_cluster, path, type);
+    if (strlen(path) == 0)
+        return -1;
+    else
+        return find_num_cluster_by_path(fd, record->begin_cluster, path, record);
 }
-
-void read_dir(int fd, size_t offset, char * path, instruction_t instr) {
-    if (path[0] == 0 && offset == fs_info->offset_to_root_dir && instr == LS) {
-        print_dir(fd, 1);
-        return;
-    }
-    dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
-    char * name = (char *)calloc(14, sizeof(char));
-    bool path_is_right = false;
-    get_name_from_path(name, path);
-    size_t num_records = number_of_dir_records(cluster_of_offset(offset));
-    while (num_records-- > 0) {
-        read_dir_record(fd, offset, record);
-        if (strcmp(name, record->full_name) == 0 && (record->type == DIRECTORY || record->type == REGFILE)) {
-            remove_name_from_path(path);
-            path_is_right = true;
-            if (strlen(path) == 0) {
-                // TODO: save data in buffers and print after
-                switch(instr) {
-                case LS:
-                    if (record->type == DIRECTORY)
-                        // TODO: directory for many clusters
-                        // this code is only for 1 dir
-                        print_dir(fd, record->begin_cluster);
-                    else
-                        print_error(WRONG_COMMAND);
-                    break;
-                case CAT:
-                    if (record->type == REGFILE)
-                        print_file(fd, record->begin_cluster, record->size);
-                    else
-                        print_error(WRONG_COMMAND);
-                    break;
-                default:
-                    break;
-                }
-            } else {
-                read_dir(fd, offset_of_cluster(record->begin_cluster), path, instr);
-            }
-        }
-        offset += 32;
-    }
-    if (!path_is_right)
-        print_error(WRONG_PATH);
-    free(name);
-    free(record);
-}
-
 
 void print_dir(int fd, size_t num_cluster) {
     size_t num_records = number_of_dir_records(num_cluster);
