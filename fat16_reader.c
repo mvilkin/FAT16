@@ -264,6 +264,15 @@ int find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, dir_
 }
 
 void print_dir(int fd, size_t num_cluster) {
+    size_t num = num_cluster;
+    do {
+        print_dir_cluster(fd, num);
+        lseek(fd, fs_info->offset_to_fat + num * 2, SEEK_SET);
+        read(fd, &num, 2);
+    } while (0x0002 <= num && num <= 0xFFEF);
+}
+
+void print_dir_cluster(int fd, size_t num_cluster) {
     size_t num_records = number_of_dir_records(num_cluster);
     dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
     size_t offset = offset_of_cluster(num_cluster);
