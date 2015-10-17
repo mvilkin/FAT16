@@ -77,7 +77,6 @@ void print_name(dir_record_t * record);
 void print_dir(int fd, size_t num_cluster);
 void print_file(int fd, size_t num_cluster, size_t file_size);
 void print_file_cluster(int fd, size_t offset, size_t size);
-void print_file_cluster(int fd, size_t offset, size_t file_size);
 void get_name_from_path(char * name, char * path);
 void remove_name_from_path(char * path);
 size_t offset_of_cluster(size_t cluster_num);
@@ -89,6 +88,9 @@ void print_help();
 void print_error(error_t type);
 int find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, dir_record_t * record);
 bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record);
+
+void foo_print_file(int fd, command_t * command);
+void foo_print_dir(int fd, command_t * command);
 
 fs_info_t * fs_info;
 
@@ -102,11 +104,6 @@ int main(int argc, char * argv[]) {
     int image_fd = open(image_name, O_RDONLY);
     init_reader(image_fd);
     command_t * command = (command_t*)calloc(1, sizeof(command_t));
-    dir_record_t * current_record = (dir_record_t*)calloc(1, sizeof(dir_record_t));
-    record_type_t current_type;
-    size_t current_cluster;
-    size_t current_size;
-    int ret;
 
     while (1) {
         printf("> ");
@@ -116,22 +113,10 @@ int main(int argc, char * argv[]) {
             print_help();
             break;
         case LS:
-            ret = find_num_cluster_by_path(image_fd, 1, command->path, current_record);
-            if (ret >= 0)
-                print_error(ret);
-            else if (current_record->type == DIRECTORY)
-                print_dir(image_fd, current_record->begin_cluster);
-            else
-                print_error(WRONG_COMMAND);
+            foo_print_dir(image_fd, command);
             break;
         case CAT:
-            ret = find_num_cluster_by_path(image_fd, 1, command->path, current_record);
-            if (ret >= 0)
-                print_error(ret);
-            else if (current_record->type == REGFILE)
-                print_file(image_fd, current_record->begin_cluster, current_record->size);
-            else
-                print_error(WRONG_COMMAND);
+            foo_print_file(image_fd, command);
             break;
         case EXIT:
         default:
@@ -141,11 +126,34 @@ int main(int argc, char * argv[]) {
             break;
     }
 
-    free(current_record);
     free(command);
     deinit_reader();
     close(image_fd);
     return 0;
+}
+
+void foo_print_dir(int fd, command_t * command) {
+    dir_record_t * record = (dir_record_t*)calloc(1, sizeof(dir_record_t));
+    int ret = find_num_cluster_by_path(fd, 0, command->path, record);
+    if (ret >= 0)
+        print_error(ret);
+    else if (record->type == DIRECTORY)
+        print_dir(fd, record->begin_cluster);
+    else
+        print_error(WRONG_COMMAND);
+    free(record);
+}
+
+void foo_print_file(int fd, command_t * command) {
+    dir_record_t * record = (dir_record_t*)calloc(1, sizeof(dir_record_t));
+    int ret = find_num_cluster_by_path(fd, 0, command->path, record);
+    if (ret >= 0)
+        print_error(ret);
+    else if (record->type == REGFILE)
+        print_file(fd, record->begin_cluster, record->size);
+    else
+        print_error(WRONG_COMMAND);
+    free(record);
 }
 
 void get_command(command_t * command) {
@@ -228,8 +236,8 @@ bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * rec
 }
 
 int find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, dir_record_t * record) {
-    if (path[0] == 0 && num_entry_cluster == 1) {
-        record->begin_cluster = 1;
+    if (path[0] == 0 && num_entry_cluster == 0) {
+        record->begin_cluster = 0;
         record->type = DIRECTORY;
         return -1;
     }
@@ -376,11 +384,11 @@ void get_name_from_path(char * name, char * path) {
 }
 
 size_t cluster_of_offset(size_t offset) {
-    return (offset == fs_info->offset_to_root_dir) ? 1 : ((offset - fs_info->offset_to_clusters) / fs_info->size_of_cluster + 2);
+    return (offset == fs_info->offset_to_root_dir) ? 0 : ((offset - fs_info->offset_to_clusters) / fs_info->size_of_cluster + 2);
 }
 
 size_t offset_of_cluster(size_t cluster_num) {
-    return (cluster_num == 1) ? (fs_info->offset_to_root_dir)
+    return (cluster_num == 0) ? (fs_info->offset_to_root_dir)
                               : (fs_info->offset_to_clusters + (cluster_num - 2) * fs_info->size_of_cluster);
 }
 
