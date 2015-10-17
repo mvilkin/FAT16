@@ -1,1 +1,1 @@
-# FAT16
+FAT16 reader for 'File systems' course
