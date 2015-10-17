@@ -88,7 +88,7 @@ void get_command(command_t * command);
 instruction_t get_instruction_from_string(char * string);
 void print_help();
 void print_error(error_t type);
-size_t find_fat_offset_by_path(int fd, size_t num_entry_cluster, char * path);
+size_t find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, record_type_t * type);
 bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record);
 
 fs_info_t * fs_info;
@@ -103,6 +103,8 @@ int main(int argc, char * argv[]) {
     int image_fd = open(image_name, O_RDONLY);
     init_reader(image_fd);
     command_t * command = (command_t*)calloc(1, sizeof(command_t));
+    record_type_t current_type;
+    size_t current_cluster;
 
     while (1) {
         printf("> ");
@@ -112,8 +114,15 @@ int main(int argc, char * argv[]) {
             print_help();
             break;
         case LS:
+            current_cluster = find_num_cluster_by_path(image_fd, 1, command->path, &current_type);
+            if (current_cluster == 0) {
+                print_error(WRONG_PATH);
+                break;
+            }
+            if (current_type == DIRECTORY)
+                print_dir(image_fd, current_cluster);
+            break;
         case CAT:
-            // TODO: divide on reading file and dir (cat n ls)
             read_dir(image_fd, fs_info->offset_to_root_dir, command->path, command->type);
         case EXIT:
         default:
@@ -208,8 +217,9 @@ bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * rec
     return false;
 }
 
-size_t find_fat_offset_by_path(int fd, size_t num_entry_cluster, char * path) {
+size_t find_num_cluster_by_path(int fd, size_t num_entry_cluster, char * path, record_type_t * type) {
     if (path[0] == 0 && num_entry_cluster == 1) {
+        *type = DIRECTORY;
         return 1;
     }
     dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
@@ -229,9 +239,14 @@ size_t find_fat_offset_by_path(int fd, size_t num_entry_cluster, char * path) {
         return 0;
     remove_name_from_path(path);
     int next_entry_cluster = record->begin_cluster;
+    record_type_t current_type = record->type;
     free(name);
     free(record);
-    return find_fat_offset_by_path(fd, record->begin_cluster, path);
+    if (strlen(path) == 0) {
+        *type = current_type;
+        return next_entry_cluster;
+    } else
+        return find_num_cluster_by_path(fd, record->begin_cluster, path, type);
 }
 
 void read_dir(int fd, size_t offset, char * path, instruction_t instr) {
