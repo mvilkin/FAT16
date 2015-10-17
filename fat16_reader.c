@@ -88,6 +88,8 @@ void get_command(command_t * command);
 instruction_t get_instruction_from_string(char * string);
 void print_help();
 void print_error(error_t type);
+size_t find_fat_offset_by_path(int fd, size_t num_entry_cluster, char * path);
+bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record);
 
 fs_info_t * fs_info;
 
@@ -194,9 +196,47 @@ void print_help() {
     printf("command 'exit' to finish usage.\n");
 }
 
+bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record) {
+    size_t num_records = number_of_dir_records(cluster_of_offset(offset));
+    while (num_records-- > 0) {
+        read_dir_record(fd, offset, record);
+        if (strcmp(name, record->full_name) == 0 && (record->type == DIRECTORY || record->type == REGFILE)) {
+            return true;
+        }
+        offset += 32;
+    }
+    return false;
+}
+
+size_t find_fat_offset_by_path(int fd, size_t num_entry_cluster, char * path) {
+    if (path[0] == 0 && num_entry_cluster == 1) {
+        return 1;
+    }
+    dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
+    char * name = (char *)calloc(14, sizeof(char));
+    get_name_from_path(name, path);
+    int num = num_entry_cluster;
+    bool path_is_right = false;
+    do {
+        if (find_name_in_cluster(fd, offset_of_cluster(num), name, record)) {
+            path_is_right = true;
+            break;
+        }
+        lseek(fd, fs_info->offset_to_fat + num * 2, SEEK_SET);
+        read(fd, &num, 2);
+    } while (0x0002 <= num && num <= 0xFFEF);
+    if (!path_is_right)
+        return 0;
+    remove_name_from_path(path);
+    int next_entry_cluster = record->begin_cluster;
+    free(name);
+    free(record);
+    return find_fat_offset_by_path(fd, record->begin_cluster, path);
+}
+
 void read_dir(int fd, size_t offset, char * path, instruction_t instr) {
     if (path[0] == 0 && offset == fs_info->offset_to_root_dir && instr == LS) {
-        print_dir(fd, 0);
+        print_dir(fd, 1);
         return;
     }
     dir_record_t * record = (dir_record_t *)calloc(1, sizeof(dir_record_t));
@@ -257,7 +297,7 @@ void print_dir(int fd, size_t num_cluster) {
 void print_file(int fd, size_t num_cluster, size_t file_size) {
     int num = num_cluster;
     do {
-        print_file_cluster(fd, fs_info->offset_to_clusters + (num - 2) * fs_info->size_of_cluster, min(file_size, fs_info->size_of_cluster));
+        print_file_cluster(fd, offset_of_cluster(num), min(file_size, fs_info->size_of_cluster));
         file_size -= fs_info->size_of_cluster;
         lseek(fd, fs_info->offset_to_fat + num * 2, SEEK_SET);
         read(fd, &num, 2);
@@ -363,16 +403,16 @@ void get_name_from_path(char * name, char * path) {
 }
 
 size_t cluster_of_offset(size_t offset) {
-    return (offset == fs_info->offset_to_root_dir) ? 0 : ((offset - fs_info->offset_to_clusters) / fs_info->size_of_cluster + 2);
+    return (offset == fs_info->offset_to_root_dir) ? 1 : ((offset - fs_info->offset_to_clusters) / fs_info->size_of_cluster + 2);
 }
 
 size_t offset_of_cluster(size_t cluster_num) {
-    return (cluster_num == 0) ? (fs_info->offset_to_root_dir)
+    return (cluster_num == 1) ? (fs_info->offset_to_root_dir)
                               : (fs_info->offset_to_clusters + (cluster_num - 2) * fs_info->size_of_cluster);
 }
 
 size_t number_of_dir_records(size_t num_cluster) {
-    return (num_cluster == 0) ? (fs_info->size_of_root_dir / 32) : (fs_info->size_of_cluster / 32);
+    return (num_cluster == 1) ? (fs_info->size_of_root_dir / 32) : (fs_info->size_of_cluster / 32);
 }
 
 void count_fs_info(boot_sector_t * bsector) {
