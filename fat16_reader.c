@@ -69,12 +69,11 @@ typedef struct {
 
 
 void init_reader(int fd, fs_info_t * fs_info);
-void deinit_reader();
+void deinit_reader(fs_info_t * fs_info);
 void read_boot_sector(int fd, boot_sector_t * bsector);
 void count_fs_info(boot_sector_t * bsector, fs_info_t * fs_info);
-void read_dir_record(int fd, size_t offset, dir_record_t * record);
-void fill_dir_record(dir_record_t * record);
 void get_dir_record(char * data, dir_record_t * record);
+void fill_dir_record(dir_record_t * record);
 void get_dir(int fd, size_t num_cluster, char ** data, size_t * data_size, fs_info_t * fs_info);
 void get_file(int fd, size_t num_cluster, size_t file_size, char * data, fs_info_t * fs_info);
 void get_cluster(int fd, size_t offset, size_t size, char * data);
@@ -128,7 +127,7 @@ int main(int argc, char * argv[]) {
     }
 
     free(command);
-    deinit_reader();
+    deinit_reader(fs_info);
     free(fs_info);
     close(image_fd);
     return 0;
@@ -233,14 +232,20 @@ void print_help() {
 }
 
 bool find_name_in_cluster(int fd, size_t offset, char * name, dir_record_t * record, fs_info_t * fs_info) {
-    size_t num_records = number_of_dir_records(cluster_of_offset(offset, fs_info), fs_info);
-    while (num_records-- > 0) {
-        read_dir_record(fd, offset, record);
+    size_t size = size_of_cluster(cluster_of_offset(offset, fs_info), fs_info);
+    char * data = (char *)calloc(size + 1, sizeof(char));
+    get_cluster(fd, offset, size, data);
+    size_t data_offset = 0;
+    while (size > 0) {
+        get_dir_record(data + data_offset, record);
         if (strcmp(name, record->full_name) == 0 && (record->type == DIRECTORY || record->type == REGFILE)) {
+            free(data);
             return true;
         }
-        offset += 32;
+        size -= 32;
+        data_offset += 32;
     }
+    free(data);
     return false;
 }
 
@@ -335,18 +340,6 @@ void get_dir_record(char * data, dir_record_t * record) {
     memcpy(&record->attr, data + 11, 1);
     memcpy(&record->begin_cluster, data + 26, 2);
     memcpy(&record->size, data + 28, 4);
-
-    fill_dir_record(record);
-}
-
-void read_dir_record(int fd, size_t offset, dir_record_t * record) {
-    lseek(fd, offset, SEEK_SET);
-    read(fd, &record->name, 8);
-    read(fd, &record->ext, 3);
-    read(fd, &record->attr, 1);
-    lseek(fd, offset + 0x1A, SEEK_SET);
-    read(fd, &record->begin_cluster, 2);
-    read(fd, &record->size, 4);
 
     fill_dir_record(record);
 }
